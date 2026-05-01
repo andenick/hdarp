@@ -1,0 +1,14 @@
+# HDARP Dependencies
+# Core PDF handling
+PyPDF2>=3.0.0
+PyMuPDF>=1.23.0
+
+# OCR Engines
+paddlepaddle>=2.5.0
+paddleocr>=2.7.0
+easyocr>=1.7.0
+pytesseract>=0.3.10
+
+# Utilities
+Pillow>=10.0.0
+numpy>=1.24.0
