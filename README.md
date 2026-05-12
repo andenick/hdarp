@@ -83,9 +83,11 @@ HDARP implements a strict policy: **never fabricate content**. If a region canno
 
 ---
 
-## Installation
+## Quick Start
 
 ```bash
+git clone https://github.com/andenick/hdarp.git
+cd hdarp
 pip install -r requirements.txt
 ```
 
