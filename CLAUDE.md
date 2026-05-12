@@ -32,6 +32,6 @@ print(result.rule_applied, result.confidence)
 
 This is one of four repositories demonstrating an integrated system for AI-driven economic research:
 1. **HDARP** (this repo) — Input layer: get data into the pipeline
-2. [anu-suite](https://github.com/andenick/anu-suite) — Protocol layer: structure agent tasks
+2. [anu-data-framework](https://github.com/andenick/anu-data-framework) — Protocol layer: structure agent tasks
 3. [nickydata](https://github.com/andenick/nickydata) — Reproducibility layer: run without agents
 4. [capitalism-data](https://github.com/andenick/capitalism-data) — Demonstration: proof at scale

@@ -12,6 +12,8 @@ HDARP solves the fundamental problem of getting structured data out of scanned P
 
 2. **Sraffa 3.0 Multi-Engine OCR Consensus** for body text: A 3-engine ensemble (PaddleOCR, EasyOCR, Tesseract) with a 6-rule adjudication hierarchy that achieves 95-98% accuracy — significantly better than any single engine.
 
+> **Version note**: This repo implements the Sraffa 3.0 consensus engine. The current production system uses **Sraffa 4.0**, which adds document-adaptive routing (digital pages → PyMuPDF instant extraction, scanned pages → EasyOCR GPU with agent QA, QA failures → Chandra 2 NF4 fallback). The Sraffa 3.0 consensus engine remains the core OCR adjudication layer within Sraffa 4.0.
+
 The result is a hybrid system that uses expensive agent vision only where it matters (tables, equations) and free local OCR where it's sufficient (body text), with intelligent consensus to maximize accuracy.
 
 ---
