@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+title: "HDARP: Hybrid Direct Agent Reading Protocol"
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+authors:
+  - family-names: Anderson
+    given-names: Nicholas
+repository-code: "https://github.com/andenick/hdarp"
+license: MIT
+version: "5.1"
+date-released: "2026-05-01"
