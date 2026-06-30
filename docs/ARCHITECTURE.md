@@ -52,7 +52,7 @@ Pure OCR misses tables. Pure agent vision is expensive at scale. The hybrid appr
 - **DARP** (agent vision) for structured content: tables, equations, figures. ~$0.01-0.05 per page.
 - **Sraffa 3.0 OCR** (local engines) for body text. Free after one-time model download.
 
-For a 200-page document with 30 tables, the cost difference is roughly 200× (paying for 30 agent calls instead of 200).
+As an illustrative example, a 200-page document with 30 tables incurs far fewer agent calls (paying for ~30 table extractions instead of running agent vision over all 200 pages) — an order-of-magnitude cost saving. The exact ratio depends entirely on document mix; this is a worked example, not a measured figure.
 
 ### 2. Why Three OCR Engines?
 
@@ -143,17 +143,17 @@ HDARP enforces this with:
 
 ## Performance
 
-Tested on a corpus of 3,000+ academic papers, books, and regulatory documents:
+The figures below are **indicative**, not benchmark results — illustrative ranges observed across academic papers, books, and regulatory documents during development. No formal benchmark dataset or reproducible eval harness is published with this repo; treat these as order-of-magnitude guidance, not measured claims:
 
 | Metric | Single Engine | HDARP Consensus |
 |--------|--------------|-----------------|
 | Text accuracy (clean scans) | 88-92% | 95-98% |
 | Text accuracy (degraded) | 70-80% | 85-92% |
-| Table extraction | N/A | 98%+ (agent vision) |
+| Table extraction | N/A | high (agent vision) |
 | Processing speed | ~1 sec/page | ~3-5 sec/page |
 | False positives | Common | Near-zero (gap marking) |
 
-The 3-5× speed cost buys 7-15 percentage points of accuracy improvement and near-zero false positives.
+Indicatively, the 3-5× speed cost buys a meaningful accuracy improvement and near-zero false positives.
 
 ## Design Trade-offs
 

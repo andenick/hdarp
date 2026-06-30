@@ -1,6 +1,10 @@
 # HDARP — Hybrid Direct Agent Reading Protocol
 
-**Production-grade PDF extraction for AI agent pipelines. 95-98% accuracy through multi-engine OCR consensus.**
+**Production-grade PDF extraction for AI agent pipelines. High body-text accuracy through multi-engine OCR consensus.**
+
+> **Snapshot note**: This repository is a frozen snapshot of the HDARP **v5.1** OCR-consensus layer (released 2026-05-01). The protocol has since evolved; this snapshot is preserved as a self-contained reference implementation of the multi-engine consensus approach, not as the current production version.
+>
+> **On the numbers**: Accuracy and cost figures in this README and `docs/` are **indicative** — illustrative ranges and worked examples drawn from development use, *not* results from a published, reproducible benchmark dataset. No formal benchmark corpus is released with this repo. Treat them as order-of-magnitude guidance, not measured claims.
 
 ---
 
@@ -8,9 +12,9 @@
 
 HDARP solves the fundamental problem of getting structured data out of scanned PDFs at scale when you're working with AI agents. It combines two complementary approaches:
 
-1. **DARP (Direct Agent Reading)** for structured content: Uses Claude's vision API to extract tables → CSV (98%+ accuracy), equations → LaTeX, and figures → markdown descriptions.
+1. **DARP (Direct Agent Reading)** for structured content: Uses Claude's vision API to extract tables → CSV (high accuracy), equations → LaTeX, and figures → markdown descriptions.
 
-2. **Sraffa 3.0 Multi-Engine OCR Consensus** for body text: A 3-engine ensemble (PaddleOCR, EasyOCR, Tesseract) with a 6-rule adjudication hierarchy that achieves 95-98% accuracy — significantly better than any single engine.
+2. **Sraffa 3.0 Multi-Engine OCR Consensus** for body text: A 3-engine ensemble (PaddleOCR, EasyOCR, Tesseract) with a 6-rule adjudication hierarchy that is, in development use, materially more accurate than any single engine.
 
 > **Version note**: This repo implements the Sraffa 3.0 consensus engine. The current production system uses **Sraffa 4.0**, which adds document-adaptive routing (digital pages → PyMuPDF instant extraction, scanned pages → EasyOCR GPU with agent QA, QA failures → Chandra 2 NF4 fallback). The Sraffa 3.0 consensus engine remains the core OCR adjudication layer within Sraffa 4.0.
 
@@ -83,7 +87,7 @@ HDARP implements a strict policy: **never fabricate content**. If a region canno
 
 ---
 
-## Quick Start
+## Installation
 
 ```bash
 git clone https://github.com/andenick/hdarp.git
@@ -236,13 +240,13 @@ print(f"Quality: {score.total}/27 ({score.grade})")
 
 ## Performance
 
-Tested on a corpus of 3,000+ academic papers, books, and regulatory documents:
+The figures below are **indicative**, not benchmark results — illustrative ranges observed across academic papers, books, and regulatory documents during development. No formal benchmark dataset, ground-truth definition, or reproducible eval harness is published with this repo, so treat these as order-of-magnitude guidance rather than measured claims:
 
 | Metric | Single Engine | HDARP Consensus |
 |--------|--------------|-----------------|
 | Text accuracy (clean scans) | 88-92% | 95-98% |
 | Text accuracy (degraded) | 70-80% | 85-92% |
-| Table extraction | N/A (OCR only) | 98%+ (agent vision) |
+| Table extraction | N/A (OCR only) | high (agent vision) |
 | Processing speed | ~1 sec/page | ~3-5 sec/page |
 | False positives | Common | Near-zero (gap marking) |
 
@@ -293,10 +297,11 @@ MIT
 If you use HDARP in academic work:
 
 ```bibtex
-@software{hdarp2025,
+@software{hdarp2026,
   title = {HDARP: Hybrid Direct Agent Reading Protocol},
   author = {Anderson, Nicholas},
-  year = {2025},
+  version = {5.1},
+  year = {2026},
   url = {https://github.com/andenick/hdarp}
 }
 ```

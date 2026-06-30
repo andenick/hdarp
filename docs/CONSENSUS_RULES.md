@@ -130,7 +130,7 @@ These priorities are configurable. The defaults come from extensive testing on a
 
 ## Statistics Tracking
 
-Every adjudication updates a counter:
+Every adjudication updates a counter. The values below are an **illustrative example** of the shape of `get_statistics()` output — not measured results from a published benchmark:
 
 ```python
 engine.get_statistics()
