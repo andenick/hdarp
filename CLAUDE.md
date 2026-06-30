@@ -2,7 +2,9 @@
 
 ## What This Is
 
-HDARP (Hybrid Direct Agent Reading Protocol) is a production PDF extraction system that achieves 95-98% accuracy through multi-engine OCR consensus. It was built to run inside Claude Code agent pipelines for scholarly research.
+HDARP (Hybrid Direct Agent Reading Protocol) is a production PDF extraction system that reaches high body-text accuracy through multi-engine OCR consensus. It was built to run inside Claude Code agent pipelines for scholarly research.
+
+This repo is a frozen snapshot of the **v5.1** OCR-consensus layer (2026-05-01); the protocol has since evolved. Accuracy/cost figures throughout are **indicative** (illustrative ranges from development use), not results from a published benchmark dataset.
 
 ## Quick Orientation
 
