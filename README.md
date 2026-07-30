@@ -2,7 +2,7 @@
 
 **Production-grade PDF extraction for AI agent pipelines. High body-text accuracy through multi-engine OCR consensus.**
 
-> **Snapshot note**: This repository is a frozen snapshot of the HDARP **v5.1** OCR-consensus layer (released 2026-05-01). The protocol has since evolved; this snapshot is preserved as a self-contained reference implementation of the multi-engine consensus approach, not as the current production version.
+> **Snapshot note**: This repository is a frozen snapshot of the HDARP **v5.1** OCR-consensus layer, released **2026-05-01**. It is preserved as a self-contained reference implementation of the multi-engine consensus approach and is not tracked against later, unpublished versions of the protocol. Everything below describes the code in this repository as of that date.
 >
 > **On the numbers**: Accuracy and cost figures in this README and `docs/` are **indicative** — illustrative ranges and worked examples drawn from development use, *not* results from a published, reproducible benchmark dataset. No formal benchmark corpus is released with this repo. Treat them as order-of-magnitude guidance, not measured claims.
 
@@ -16,7 +16,7 @@ HDARP solves the fundamental problem of getting structured data out of scanned P
 
 2. **Sraffa 3.0 Multi-Engine OCR Consensus** for body text: A 3-engine ensemble (PaddleOCR, EasyOCR, Tesseract) with a 6-rule adjudication hierarchy that is, in development use, materially more accurate than any single engine.
 
-> **Version note**: This repo implements the Sraffa 3.0 consensus engine. The current production system uses **Sraffa 4.0**, which adds document-adaptive routing (digital pages → PyMuPDF instant extraction, scanned pages → EasyOCR GPU with agent QA, QA failures → Chandra 2 NF4 fallback). The Sraffa 3.0 consensus engine remains the core OCR adjudication layer within Sraffa 4.0.
+> **Version note**: This repo implements the Sraffa 3.0 consensus engine. Later production versions of the engine are not published here.
 
 The result is a hybrid system that uses expensive agent vision only where it matters (tables, equations) and free local OCR where it's sufficient (body text), with intelligent consensus to maximize accuracy.
 
@@ -47,7 +47,7 @@ When three OCR engines look at the same text, how do you decide which one is rig
 | 3 | **High-Confidence Unilateral** | 0.85-0.90 | One engine >95% confidence, others <50%. Trust the confident one. |
 | 4 | **Column-Type Validation** | 0.85-0.92 | NUMERIC context catches O→0, I→1 substitutions. Semantic validation. |
 | 5 | **Character Similarity** | 0.80-0.90 | >80% character overlap. Weighted by engine priority. |
-| 6 | **Default to Primary** | 0.60-0.85 | Fallback to PaddleOCR (highest-priority engine). |
+| 6 | **Default to Primary** | 0.60-0.90 | Fallback to PaddleOCR (highest-priority engine). `max(0.60, conf × 0.9)` — note the floor *raises* a read the engine itself distrusted. |
 
 The probabilistic confidence combination in Rule 1 is mathematically rigorous: if PaddleOCR is 90% confident and EasyOCR is 85% confident and Tesseract is 80% confident, the probability all three are wrong simultaneously is (0.10)(0.15)(0.20) = 0.003 — giving us 99.7% confidence in perfect agreement.
 
@@ -65,25 +65,30 @@ Every extraction is scored on a 27-point weighted scale:
 | Formatting | 3 | Section structure, whitespace, encoding |
 | Metadata | 4 | Page numbers, headers/footers, cross-references |
 
+`QualityScorer` is a standalone utility in this snapshot: the batch pipeline does not call it, and 18 of its 27 points score tables, equations, figures and metadata that this package does not itself produce, so the caller supplies them.
+
 ### 4. Batch Processing Architecture
 
-HDARP processes documents in batches with a parallel validation pattern:
+HDARP processes documents in batches. Each batch is prepared (density assessment → chunking), then every chunk of every prepared document is processed in chunk order, and the results are concatenated with an explicit chunk boundary marker:
 
 ```
-Batch 1 → [Processors extract] → Complete
-                                    ↓
-Batch 2 → [Processors extract] → [Validator checks Batch 1] → Complete
-                                                                  ↓
-Batch 3 → [Processors extract] → [Validator checks Batch 2] → Complete
+Batch 1 → [prepare: chunk each PDF] → [process each chunk in order] → Complete
+Batch 2 → [prepare: chunk each PDF] → [process each chunk in order] → Complete
 ```
 
-This previous-batch validation design eliminates race conditions and enables true parallel execution. The validator always works on a completed batch while processors handle the current one.
+**What this snapshot does not contain**: batches run sequentially in a single process — there is no validator stage, and no threading, multiprocessing or async anywhere in the package. The previous-batch validation pattern used to overlap validation with extraction belongs to the wider protocol and is not published here.
 
-**Automatic continuation** (v5.1): After completing a batch, the system automatically advances to the next PREPARED batch and continues until no more remain. Use `--single` for one-batch-at-a-time processing.
+**Automatic continuation** (v5.1): After completing a batch, the system automatically advances to the next batch of PENDING documents and continues until no more remain. Use `--single` for one-batch-at-a-time processing.
 
-### 5. Zero-Fabrication Guarantee
+### 5. Confidence Reporting (and what is *not* guaranteed)
 
-HDARP implements a strict policy: **never fabricate content**. If a region cannot be read with sufficient confidence, it is marked as a gap rather than filled with plausible-looking text. This is critical for scholarly and regulatory use cases where false positives are worse than missing data.
+The design intent is that a fabricated number is worse than a missing one. What this snapshot actually implements towards that is reporting, not refusal:
+
+- **Every result carries the rule that produced it**, the engines that contributed, and the alternatives considered — so a low-quality line is identifiable after the fact.
+- **The embedded-text path reports no confidence at all.** When a PDF has a text layer, that text is copied verbatim, no OCR and no consensus run, and `confidence` is `None` rather than a hardcoded 1.0.
+- **The consensus engine applies no minimum-confidence threshold and marks no gaps.** Rule 6 always returns the primary engine's text, and its `max(0.60, conf × 0.9)` floor *raises* a read the engine itself distrusted — three garbage reads at 0.11 / 0.09 / 0.05 come back as text at 0.600.
+
+**So: if your use case needs "do not use below X", you must apply that floor yourself to `result.confidence`.** Gap marking is a property of the surrounding protocol, not of this package.
 
 ---
 
@@ -92,12 +97,21 @@ HDARP implements a strict policy: **never fabricate content**. If a region canno
 ```bash
 git clone https://github.com/andenick/hdarp.git
 cd hdarp
-pip install -r requirements.txt
+pip install -e .            # importable from anywhere; chunking + consensus only
+```
+
+`pip install -e .` pulls only the light dependencies (`pypdf`, `Pillow`, `numpy`) — enough to chunk PDFs and run the consensus engine. Add extras as needed:
+
+```bash
+pip install -e ".[pdf]"     # PyMuPDF, for rendering pages and reading text layers
+pip install -e ".[ocr]"     # PaddleOCR + EasyOCR + Tesseract wrappers
+pip install -e ".[dev]"     # pytest
+pip install -r requirements.txt   # or: everything at once
 ```
 
 ### OCR Engine Dependencies
 
-HDARP requires three OCR engines. Install them separately:
+Running actual OCR requires the three engines. Install them separately:
 
 ```bash
 # PaddleOCR (primary engine)
@@ -113,8 +127,10 @@ pip install easyocr
 pip install pytesseract
 
 # PDF handling
-pip install PyPDF2 PyMuPDF
+pip install pypdf PyMuPDF
 ```
+
+See [Third-party components and licences](#third-party-components-and-licences) before shipping a build that includes PyMuPDF.
 
 ---
 
@@ -159,12 +175,16 @@ result = engine.adjudicate(
 )
 
 print(f"Winner: {result.text}")           # "Total Revenue: $1,234,567"
-print(f"Confidence: {result.confidence}")  # 0.987 (perfect agreement between 2 engines)
+print(f"Confidence: {result.confidence}")  # 0.95 (majority agreement, 2 of 3 engines — Rule 2 cap)
 print(f"Rule: {result.rule_applied}")      # "majority_agreement"
 print(f"Engines: {result.winning_engines}")# ["paddle", "easyocr"]
 ```
 
+These values are asserted in `tests/test_consensus.py`, so they cannot drift away from the code.
+
 ### Score Extraction Quality
+
+`QualityScorer` is standalone — nothing in the pipeline calls it, and you supply the table/equation/figure/metadata inputs it scores:
 
 ```python
 from hdarp import QualityScorer
@@ -172,6 +192,14 @@ from hdarp import QualityScorer
 scorer = QualityScorer()
 score = scorer.score_extraction(extraction_result)
 print(f"Quality: {score.total}/27 ({score.grade})")
+```
+
+### Run the example, and the tests
+
+```bash
+python examples/run_example.py          # chunk a generated PDF, then adjudicate
+python examples/run_example.py doc.pdf  # ... or chunk a real one
+python -m pytest                        # 24 assertions across the three modules
 ```
 
 ---
@@ -216,39 +244,37 @@ print(f"Quality: {score.total}/27 ({score.grade})")
 │             │                                        │
 │             ▼                                        │
 │  ┌──────────────────────┐                           │
-│  │ Batch Orchestration  │ ← Parallel processing     │
+│  │ Batch Orchestration  │ ← Sequential batches      │
 │  │ (orchestrator.py)    │   with auto-continuation  │
 │  └──────────────────────┘                           │
 │                                                      │
 └─────────────────────────────────────────────────────┘
 ```
 
+Two notes on reading this diagram against the shipped code: quality scoring is a standalone utility that the batch pipeline does not call (it stores the mean OCR consensus confidence instead), and batch orchestration is single-threaded — there is no validator stage and no concurrency in this package.
+
 ---
 
 ## Module Reference
 
+Line counts below are `wc -l` of the files in this commit.
+
 | Module | LOC | Purpose |
 |--------|-----|---------|
-| `splitter.py` | 582 | Density-aware PDF chunking with retry logic |
-| `ocr_engines.py` | 627 | PaddleOCR, EasyOCR, Tesseract wrappers with unified interface |
-| `consensus.py` | 590 | 6-rule consensus adjudication engine |
-| `processor.py` | 356 | Multi-engine OCR processing orchestration |
-| `orchestrator.py` | 756 | Batch pipeline with state management and auto-continuation |
-| `quality_scorer.py` | 640 | 27-point quality scoring framework |
+| `consensus.py` | 635 | 6-rule consensus adjudication engine |
+| `ocr_engines.py` | 494 | PaddleOCR, EasyOCR, Tesseract wrappers with unified interface |
+| `splitter.py` | 451 | Density-aware PDF chunking with retry logic |
+| `orchestrator.py` | 444 | Batch pipeline with state management and auto-continuation |
+| `processor.py` | 332 | Multi-engine OCR processing orchestration |
+| `quality_scorer.py` | 318 | 27-point quality scoring framework (standalone) |
+
+2,674 lines across the six modules, 2,745 including `__init__.py`; plus 380 lines of tests and 145 of example.
 
 ---
 
 ## Performance
 
-The figures below are **indicative**, not benchmark results — illustrative ranges observed across academic papers, books, and regulatory documents during development. No formal benchmark dataset, ground-truth definition, or reproducible eval harness is published with this repo, so treat these as order-of-magnitude guidance rather than measured claims:
-
-| Metric | Single Engine | HDARP Consensus |
-|--------|--------------|-----------------|
-| Text accuracy (clean scans) | 88-92% | 95-98% |
-| Text accuracy (degraded) | 70-80% | 85-92% |
-| Table extraction | N/A (OCR only) | high (agent vision) |
-| Processing speed | ~1 sec/page | ~3-5 sec/page |
-| False positives | Common | Near-zero (gap marking) |
+Indicative performance figures live in one place — [docs/ARCHITECTURE.md § Performance](docs/ARCHITECTURE.md#performance) — together with the caveat that applies to them. They are illustrative ranges from development use, not benchmark results; no benchmark dataset or eval harness ships with this repo.
 
 ---
 
@@ -260,7 +286,7 @@ HDARP was built for a specific use case: enabling AI agents to reliably extract 
 
 2. **Transparency over opacity**: Every extraction includes a full audit trail — which engine won, which rule applied, what the confidence was, and what the alternatives were. A researcher can inspect any result and understand why it was chosen.
 
-3. **Safety over convenience**: The zero-fabrication guarantee means HDARP will never produce plausible-looking text that wasn't in the source document. Missing data is marked as missing, not filled in.
+3. **Safety over convenience**: never present a guess as a reading. In this snapshot that principle is implemented as *reporting* — every line carries its rule and confidence, and the embedded-text path reports no confidence rather than a fake perfect one — not as *refusal*: the consensus engine has no minimum-confidence threshold and does not gap-mark. See [Confidence Reporting](#5-confidence-reporting-and-what-is-not-guaranteed).
 
 ---
 
@@ -288,7 +314,23 @@ This project uses HDARP for PDF extraction.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+### Third-party components and licences
+
+The MIT licence covers this repository's own code only. A build that installs the dependencies below inherits their terms, and one of them is copyleft:
+
+| Component | Licence | Notes |
+|---|---|---|
+| **PyMuPDF** (`fitz`) | **AGPL-3.0-or-later, or a commercial licence from Artifex** | **Copyleft.** Used for page rendering (`processor.py`) and embedded-text extraction (`ocr_engines.py`). If you distribute or network-serve a build that includes PyMuPDF, AGPL obligations apply to that build unless you hold a commercial licence. It is an optional extra here (`pip install -e ".[pdf]"`), but the OCR path does not work without it. |
+| pypdf | BSD-3-Clause | PDF reading/writing in `splitter.py`. |
+| Pillow | MIT-CMU | Image handling. |
+| NumPy | BSD-3-Clause | Array handling in the engine wrappers. |
+| PaddleOCR / PaddlePaddle | Apache-2.0 | Optional OCR extra. |
+| EasyOCR | Apache-2.0 | Optional OCR extra. |
+| pytesseract | Apache-2.0 | Optional OCR extra; wraps the Tesseract binary (Apache-2.0), which you install separately. |
+
+Licences are as published by each project at the time of writing; verify against the version you install.
 
 ---
 

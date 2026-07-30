@@ -8,7 +8,7 @@ Three principles guide every design decision:
 
 1. **Accuracy over speed** — Three OCR engines are slower than one, but the consensus mechanism catches errors no single engine would.
 2. **Transparency over opacity** — Every extraction includes a full audit trail.
-3. **Safety over convenience** — The zero-fabrication guarantee is non-negotiable.
+3. **Safety over convenience** — Never present a guess as a reading. See [§5](#5-what-this-snapshot-does-and-does-not-do-about-fabrication) for what that principle does and does not amount to in the shipped code.
 
 ## High-Level Pipeline
 
@@ -33,7 +33,7 @@ PDF Input
    │   └─→ Sraffa 3.0 OCR (consensus.py + ocr_engines.py)
    │         PaddleOCR + EasyOCR + Tesseract
    │         6-rule consensus adjudication
-   │         95-98% accuracy
+   │         95-98% accuracy (indicative — see Performance)
    │
    ├─→ Quality Scoring (quality_scorer.py)
    │     27-point weighted framework
@@ -96,50 +96,60 @@ OCR confidence scores are not comparable across engines and don't map cleanly to
 
 Scores below a threshold get flagged for human review or re-processing with different parameters.
 
-### 5. Why Zero-Fabrication?
+The scorer is a standalone utility in this snapshot — `orchestrator.py` does not call it. The catalog's `quality_score` column holds the mean OCR consensus confidence (0-1), or nothing at all when no confidence was measured.
+
+### 5. What this snapshot does (and does not do) about fabrication
 
 A fabricated number is worse than a missing number. In scholarly contexts, missing data is a known unknown — you handle it explicitly. Fabricated data is an unknown unknown — it corrupts everything downstream.
 
-HDARP enforces this with:
+What the shipped code does towards that:
 
-- **Confidence floors**: Below 0.60 confidence, return empty string + gap marker
-- **Content filter detection**: If the agent vision call gets filtered, mark gap; never substitute "plausible" content
-- **Audit trail**: Every result records which rule fired, which engines contributed, what alternatives were considered
+- **Audit trail**: every result records which rule fired, which engines contributed, and what alternatives were considered.
+- **No invented confidence**: the embedded-text path runs no OCR and no consensus, so it reports `confidence: None` rather than a hardcoded 1.0, and the catalog stores nothing rather than a perfect score.
+
+What it does **not** do, and you must therefore do yourself:
+
+- **There is no confidence threshold and no gap marker.** Rule 6 always returns the primary engine's text, and its `max(0.60, conf × 0.9)` floor raises a distrusted read to 0.60 instead of dropping it. Apply your own floor to `result.confidence`.
+- **There is no content-filter handling here**, because there is no agent-vision call in this package.
 
 ## Module Responsibilities
 
-### `splitter.py` (582 LOC)
+Line counts are `wc -l` of the files in this commit.
+
+### `splitter.py` (451 LOC)
 - Density assessment
 - Adaptive chunking (PAGE_FIRST vs SIZE_FIRST)
 - Retry logic for oversized chunks
 - Manifest generation
 
-### `consensus.py` (590 LOC)
+### `consensus.py` (635 LOC)
 - 6-rule adjudication hierarchy
 - Probabilistic confidence combination
 - Statistics tracking
 - Numeric cleaning for column-type validation
 
-### `ocr_engines.py` (627 LOC)
+### `ocr_engines.py` (494 LOC)
 - Unified interface for PaddleOCR, EasyOCR, Tesseract
 - Engine initialization and warmup
 - Result normalization
+- Embedded-text pre-check (PyMuPDF; not OCR, not measured)
 
-### `processor.py` (356 LOC)
+### `processor.py` (332 LOC)
 - Multi-engine OCR orchestration
 - Coordinates engines + consensus
 - Error handling and recovery
 
-### `orchestrator.py` (756 LOC)
-- Batch pipeline state management
+### `orchestrator.py` (444 LOC)
+- Batch pipeline state management (sequential; no validator, no concurrency)
 - Automatic batch continuation
-- Catalog synchronization
-- Pre-flight content filter detection
+- Reads back the splitter's manifest and processes each chunk in order
+- Catalog synchronisation (CSV)
 
-### `quality_scorer.py` (640 LOC)
+### `quality_scorer.py` (318 LOC)
 - 27-point weighted scoring framework
 - Per-component metrics
 - Quality grade assignment (A-F)
+- Standalone: the batch pipeline does not call it
 
 ## Performance
 
@@ -151,9 +161,10 @@ The figures below are **indicative**, not benchmark results — illustrative ran
 | Text accuracy (degraded) | 70-80% | 85-92% |
 | Table extraction | N/A | high (agent vision) |
 | Processing speed | ~1 sec/page | ~3-5 sec/page |
-| False positives | Common | Near-zero (gap marking) |
 
-Indicatively, the 3-5× speed cost buys a meaningful accuracy improvement and near-zero false positives.
+(An earlier version of this table claimed "near-zero false positives (gap marking)". That row has been removed: this package does not gap-mark, and no false-positive rate was ever measured. See [§5](#5-what-this-snapshot-does-and-does-not-do-about-fabrication).)
+
+Indicatively, the 3-5× speed cost buys a meaningful accuracy improvement.
 
 ## Design Trade-offs
 
@@ -167,7 +178,7 @@ Indicatively, the 3-5× speed cost buys a meaningful accuracy improvement and ne
 - Real-time processing (batch architecture, not streaming)
 - Memory efficiency (loads all three OCR engines simultaneously)
 
-For high-throughput use cases, a single-engine pipeline with Tesseract or PaddleOCR alone would be 3-5× faster at the cost of 7-15 percentage points of accuracy. The right choice depends on whether your downstream use case can tolerate fabricated content or missing data.
+For high-throughput use cases, a single-engine pipeline with Tesseract or PaddleOCR alone would be 3-5× faster at the cost of an indicative 7-15 percentage points of accuracy. The right choice depends on how much error your downstream use case can absorb — and, either way, on the confidence floor you apply yourself.
 
 ## Integration with AI Agent Pipelines
 

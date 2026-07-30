@@ -74,11 +74,25 @@ This rule catches semantic errors. The most common: O→0, I→1, l→1, S→5. 
 ```
 column_type = "NUMERIC"
 PaddleOCR:  "1O5.3" (conf 0.85)  ← O instead of 0
-EasyOCR:    "1O5.3" (conf 0.82)  ← same OCR error
+EasyOCR:    "lO5.3" (conf 0.40)  ← l instead of 1, O instead of 0
 Tesseract:  ""      (conf 0.0)
+→ Rules 1-3 fall through (the engines disagree)
 → Cleaned:  "105.3"
 → Result:   "105.3" (conf 0.92, winning_engines=["paddle"], rule="column_type_validation")
 ```
+
+**Known limitation — correlated errors are NOT caught.** The rules are tried in
+order, so if both engines make the *same* mistake, Rule 1 (perfect agreement)
+fires before Rule 4 is ever consulted and the error survives:
+
+```
+column_type = "NUMERIC"
+PaddleOCR:  "1O5.3" (conf 0.85)
+EasyOCR:    "1O5.3" (conf 0.82)  ← same OCR error
+→ Result:   "1O5.3" (conf 0.973, rule="perfect_agreement")   ← not cleaned
+```
+
+Both cases are asserted in `tests/test_consensus.py`.
 
 ### Rule 5: Character Similarity
 **Fires when**: Two engines produce texts with >80% character similarity (using `SequenceMatcher`).
@@ -92,9 +106,9 @@ If two engines mostly agree but differ in one or two characters (typical OCR var
 **Example**:
 ```
 PaddleOCR:  "Financial Statement" (conf 0.88)
-EasyOCR:    "Financial Statment"  (conf 0.86)  ← missing 'e', 95% similar
+EasyOCR:    "Financial Statment"  (conf 0.86)  ← missing 'e', 97% similar
 Tesseract:  ""                    (conf 0.0)
-→ Similarity: 0.95
+→ Similarity: 0.973
 → Result:   "Financial Statement" (conf 0.90, winning_engines=["paddle", "easyocr"])
 ```
 
@@ -105,16 +119,23 @@ Tesseract:  ""                    (conf 0.0)
 
 Fallback to the highest-priority engine (PaddleOCR), with reduced confidence because we couldn't reach consensus.
 
-**Capped confidence**: Engine's reported confidence × 0.9, with a floor of 0.60
+**Confidence range**: [0.60, 0.90] — engine confidence × 0.9, floored at 0.60
 
 **Example**:
 ```
-PaddleOCR:  "Item A"   (conf 0.75)
-EasyOCR:    "Item B"   (conf 0.72)  ← different
-Tesseract:  "Item C"   (conf 0.70)  ← different
+PaddleOCR:  "Alpha"   (conf 0.75)
+EasyOCR:    "Beta"    (conf 0.72)  ← different
+Tesseract:  "Gamma"   (conf 0.70)  ← different
 → No agreement, no high-confidence unilateral, no similarity
-→ Result:   "Item A" (conf 0.675, winning_engines=["paddle"], rule="default_to_primary")
+→ Result:   "Alpha" (conf 0.675, winning_engines=["paddle"], rule="default_to_primary")
 ```
+
+Note the strings have to be genuinely dissimilar to reach Rule 6: near-misses
+like "Item A" / "Item B" are >80% similar and are taken by Rule 5 instead.
+
+Note also that the 0.60 floor cuts both ways. It discounts a confident engine
+(0.90 → 0.81), but it *raises* a read the engine itself distrusted (0.11 →
+0.60). Rule 6 never drops a line.
 
 ## Engine Priority
 
@@ -126,7 +147,7 @@ The consensus engine ranks engines for tie-breaking:
 | EasyOCR | 2 | Strong on degraded scans; good fallback |
 | Tesseract | 1 (lowest) | Fast and reliable but lower raw accuracy |
 
-These priorities are configurable. The defaults come from extensive testing on academic papers, regulatory filings, and historical documents.
+The priorities live in a plain dict on the engine (`engine.engine_priority`), which you can override after construction; the constructor takes no arguments. The defaults come from development use on academic papers, regulatory filings, and historical documents — not from a published benchmark.
 
 ## Statistics Tracking
 
@@ -158,10 +179,21 @@ The rules are ordered by reliability of evidence:
 5. **Character similarity** handles the "close but not exact" case
 6. **Default to primary** is the safe fallback
 
-Each rule's confidence cap reflects the strength of its evidence. Perfect agreement gets 0.99; default fallback gets capped at 0.85 even if the underlying engine reported higher.
+Each rule's confidence cap reflects the strength of its evidence. Perfect agreement gets 0.99; the default fallback is capped at 0.90 (engine confidence × 0.9) and floored at 0.60.
 
-## Zero-Fabrication Guarantee
+## No confidence threshold: what the engine will *not* do for you
 
-If no rule produces a result with confidence above a configurable threshold (default 0.60), the consensus engine returns an empty string with rule="no_engines" or rule="default_fallback". The downstream pipeline marks this as a gap rather than fabricating content.
+This engine always returns a text. It has **no** minimum-confidence threshold, **no** gap marker, and **no** "below threshold" return path — the only empty results are the degenerate ones (`no_engines` when nothing was passed in, `perfect_agreement_empty` when every engine returned an empty string).
 
-This is critical for scholarly and regulatory use cases where a fabricated number is worse than a missing number.
+Concretely, three garbage reads come back as an asserted line:
+
+```
+PaddleOCR:  "Itcm A" (conf 0.11)
+EasyOCR:    "Xtem B" (conf 0.09)
+Tesseract:  "Ztum C" (conf 0.05)
+→ Result:   "Itcm A" (conf 0.600, rule="default_to_primary")
+```
+
+The 0.60 you get back is the floor, not a measurement of that line.
+
+For scholarly and regulatory use, where a fabricated number is worse than a missing one, the caller must therefore apply its own floor to `result.confidence` and decide what to do below it. Gap marking belongs to the surrounding protocol, not to this package. This behaviour is asserted in `tests/test_consensus.py::test_engine_applies_no_minimum_confidence_threshold`.
