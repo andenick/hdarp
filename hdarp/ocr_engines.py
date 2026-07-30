@@ -18,7 +18,7 @@ Architecture:
 - Consistent return format: (texts, confidences)
 
 Author: Nicholas Anderson
-Version: 1.0.0
+Version: 5.1 (snapshot released 2026-05-01)
 License: MIT
 """
 
@@ -87,8 +87,9 @@ class PaddleOCREngine(BaseOCREngine):
     """
     PaddleOCR wrapper — Primary OCR engine.
 
-    Best overall accuracy (95-98% on clean documents).
-    Handles multi-language, supports angles, excellent line detection.
+    Best overall accuracy in development use (indicative 95-98% on clean
+    documents; not a benchmark result — no benchmark dataset ships with this
+    repo). Handles multi-language, supports angles, good line detection.
     """
 
     def __init__(self, lang: str = "en"):
@@ -364,9 +365,11 @@ class PyMuPDFExtractor:
     """
     PyMuPDF embedded text extractor — Pre-check before OCR.
 
-    NOT an OCR engine. Extracts embedded text from PDFs instantly.
-    100% accurate for PDFs with embedded text (most modern PDFs).
-    Always check this first before running OCR.
+    NOT an OCR engine. Copies the embedded text layer of a PDF, instantly.
+    It reproduces whatever the text layer says — which is exact for a
+    born-digital PDF, and is only as good as the producer's own OCR for a
+    scanned PDF that was OCR'd elsewhere. Nothing here is measured, so no
+    confidence is reported for this path.
     """
 
     def __init__(self):
@@ -386,6 +389,14 @@ class PyMuPDFExtractor:
             return False
 
     def extract_text(self, pdf_path: str) -> Optional[str]:
+        """
+        Return the document's embedded text, or None if there effectively is none.
+
+        Gate (deliberately coarse): a page counts if it yields >50 stripped
+        characters, and the document counts if the kept pages total >100
+        characters. A mostly-scanned document with a few born-digital pages
+        therefore passes this gate, and the caller will not run OCR on it.
+        """
         if not self.is_available():
             return None
 

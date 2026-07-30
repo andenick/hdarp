@@ -6,15 +6,19 @@ Sraffa 3.0 Processor — Multi-Engine OCR Orchestration
 Main orchestrator for multi-engine OCR with consensus adjudication.
 
 Workflow:
-1. PyMuPDF Pre-Check: Try embedded text extraction (instant, 100% accurate)
+1. PyMuPDF Pre-Check: If the PDF carries an embedded text layer, that text is
+   returned verbatim. No OCR and no consensus run on this path, so no measured
+   confidence exists for it: `confidence` is None and `consensus_ran` is False.
 2. Multi-Engine OCR: If no embedded text, run PaddleOCR + EasyOCR + Tesseract
 3. Consensus Adjudication: Apply 6-rule consensus algorithm per line
 4. Statistics Tracking: Monitor agreement rates and rule usage
 
-Expected Accuracy: 95-98% on clean documents, 85-92% on degraded scans
+Indicative accuracy (illustrative ranges from development use, NOT results from
+a published benchmark dataset — none ships with this repo): 95-98% on clean
+documents, 85-92% on degraded scans.
 
 Author: Nicholas Anderson
-Version: 1.0.0
+Version: 5.1 (snapshot released 2026-05-01)
 License: MIT
 """
 
@@ -41,10 +45,17 @@ class Sraffa30Processor:
     Main HDARP OCR processor with multi-engine consensus.
 
     Features:
-    - PyMuPDF embedded text pre-check (instant, 100% accurate)
+    - PyMuPDF embedded text pre-check (instant; text layer copied verbatim,
+      no OCR and no consensus, therefore no measured confidence)
     - Multi-engine OCR (PaddleOCR + EasyOCR + Tesseract)
     - Line-by-line consensus adjudication
     - Statistics tracking and reporting
+
+    Note on the embedded-text pre-check: PyMuPDFExtractor.extract_text accepts a
+    document as "has embedded text" when any page yields >50 stripped characters
+    and the document totals >100, so a largely scanned document with a few
+    digital pages takes this path and is NOT consensus-adjudicated. Callers that
+    require consensus on every page should call process_page directly.
     """
 
     def __init__(self):
@@ -78,7 +89,22 @@ class Sraffa30Processor:
         logger.info("=" * 80)
 
     def process_pdf(self, pdf_path: str) -> Dict:
-        """Process a PDF file using HDARP methodology."""
+        """
+        Process a PDF file using HDARP methodology.
+
+        Returns a dict with at least:
+            method            'pymupdf_embedded' or 'sraffa30_ocr'
+            text              extracted text
+            confidence        float in [0, 1] for the OCR path (mean of the
+                              per-line consensus confidences), or None for the
+                              embedded-text path, where nothing was measured
+            confidence_basis  how to read `confidence`
+            consensus_ran     whether the consensus engine adjudicated anything
+
+        `confidence` is deliberately None (not 1.0) on the embedded-text path:
+        copying a text layer is not a measurement, and reporting it as a perfect
+        score would put a fabricated 1.0 into every downstream average.
+        """
         pdf_path = Path(pdf_path)
 
         if not pdf_path.exists():
@@ -97,7 +123,11 @@ class Sraffa30Processor:
                 return {
                     'method': 'pymupdf_embedded',
                     'text': embedded_text,
-                    'confidence': 1.0,
+                    # Not measured: the text layer was copied, no OCR ran and no
+                    # consensus rule fired. None, never 1.0.
+                    'confidence': None,
+                    'confidence_basis': 'not_measured_embedded_text_layer',
+                    'consensus_ran': False,
                     'pdf_path': str(pdf_path),
                     'timestamp': datetime.now().isoformat(),
                     'statistics': self.get_statistics()
@@ -140,6 +170,8 @@ class Sraffa30Processor:
                 'method': 'sraffa30_ocr',
                 'text': combined_text,
                 'confidence': avg_conf,
+                'confidence_basis': 'mean_page_consensus_confidence',
+                'consensus_ran': True,
                 'pdf_path': str(pdf_path),
                 'num_pages': num_pages,
                 'timestamp': datetime.now().isoformat(),
@@ -258,7 +290,11 @@ def main():
         print("PROCESSING COMPLETE")
         print("=" * 80)
         print(f"Method: {result['method']}")
-        print(f"Confidence: {result['confidence']:.3f}")
+        confidence = result.get('confidence')
+        if isinstance(confidence, (int, float)):
+            print(f"Confidence: {confidence:.3f} ({result.get('confidence_basis', 'unspecified')})")
+        else:
+            print("Confidence: not measured (embedded text layer copied; no OCR, no consensus)")
         print(f"Text length: {len(result['text'])} characters")
 
         if result['method'] == 'sraffa30_ocr':

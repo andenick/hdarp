@@ -6,12 +6,18 @@ HDARP Auto-Orchestrator — Batch pipeline with auto-continuation
 Orchestrates HDARP processing across many PDFs:
 1. Discovers documents in a corpus directory
 2. Tracks state in a master catalog (CSV)
-3. Manages chunk preparation, processing, validation
+3. Manages chunk preparation, then processes each prepared chunk in order
 4. Auto-continues across batches without user intervention
 5. Records hash-based audit trail
 
+Scope of this snapshot: batches run sequentially in a single process. There is
+no validator stage and no concurrency here — the previous-batch validation and
+parallel-execution design described in the wider protocol is not part of this
+package. The catalog's `quality_score` column holds the mean OCR consensus
+confidence (0-1), NOT the 27-point QualityScorer total.
+
 Author: Nicholas Anderson
-Version: 1.0.0
+Version: 5.1 (snapshot released 2026-05-01)
 License: MIT
 """
 
@@ -42,12 +48,19 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CatalogEntry:
-    """Master catalog entry for a single document."""
+    """
+    Master catalog entry for a single document.
+
+    quality_score is the mean OCR consensus confidence in [0, 1], or None when
+    nothing was measured (e.g. the embedded-text path, which runs no OCR). It is
+    NOT the 0-27 QualityScorer total: QualityScorer needs table/equation/figure
+    inputs that this package does not produce, so the pipeline does not call it.
+    """
     doc_id: str
     pdf_path: str
     total_pages: int
     total_size_mb: float
-    status: str  # PENDING, PREPARED, PROCESSING, COMPLETE, VERIFIED, FAILED
+    status: str  # PENDING, PREPARED, COMPLETE, FAILED
     chunk_count: int
     quality_score: Optional[float]
     completion_date: Optional[str]
@@ -65,11 +78,13 @@ class HDARPOrchestrator:
     Batch orchestrator for HDARP processing.
 
     Maintains a master catalog tracking the status of each document,
-    and runs the full pipeline (chunk -> process -> validate) with
-    auto-continuation across batches.
+    and runs the pipeline (chunk -> process) with auto-continuation across
+    batches. Batches run one after another in a single process; there is no
+    validation stage in this package.
     """
 
-    STATUSES = ["PENDING", "PREPARED", "PROCESSING", "COMPLETE", "VERIFIED", "FAILED", "BLOCKED"]
+    # Only the statuses the pipeline actually assigns.
+    STATUSES = ["PENDING", "PREPARED", "COMPLETE", "FAILED"]
 
     def __init__(self,
                  corpus_dir: Path,
@@ -217,8 +232,74 @@ class HDARPOrchestrator:
         self.save_catalog(catalog)
         return prepared
 
+    def chunk_paths(self, doc_id: str) -> List[Path]:
+        """
+        Return the chunk PDFs written by prepare_batch, in chunk order.
+
+        Reads the manifest the splitter wrote to
+        `<output_dir>/<doc_id>/manifest.json`. Returns an empty list if the
+        document was never prepared, the manifest is unreadable, or the chunk
+        files are gone — callers fall back to the source PDF in that case.
+        """
+        manifest_path = self.output_dir / doc_id / "manifest.json"
+        if not manifest_path.exists():
+            return []
+
+        try:
+            with open(manifest_path, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+        except (OSError, ValueError) as e:
+            logger.warning(f"Unreadable manifest for {doc_id}: {e}")
+            return []
+
+        chunks = sorted(manifest.get("chunks", []), key=lambda c: c.get("chunk_num", 0))
+        paths = [Path(c["file_path"]) for c in chunks if c.get("file_path")]
+        missing = [p for p in paths if not p.exists()]
+        if missing:
+            logger.warning(f"{doc_id}: {len(missing)} chunk file(s) listed in the "
+                           f"manifest are missing on disk")
+        return [p for p in paths if p.exists()]
+
+    def _process_chunks(self, processor: Sraffa30Processor,
+                        chunk_paths: List[Path]) -> Dict:
+        """
+        Run the processor over each chunk in order and combine the results.
+
+        Text is concatenated in chunk order with an explicit boundary marker per
+        chunk. The combined confidence is the unweighted mean of the chunk
+        confidences that were actually measured (chunks taking the embedded-text
+        path report None and are excluded); it is None if none were measured.
+        """
+        parts: List[str] = []
+        confidences: List[float] = []
+        methods: List[str] = []
+
+        for chunk_path in chunk_paths:
+            chunk_result = processor.process_pdf(str(chunk_path))
+            parts.append(f"<!-- chunk: {chunk_path.name} -->\n{chunk_result['text']}")
+            conf = chunk_result.get('confidence')
+            if isinstance(conf, (int, float)):
+                confidences.append(float(conf))
+            method = chunk_result.get('method')
+            if method and method not in methods:
+                methods.append(method)
+
+        return {
+            'method': '+'.join(methods) if methods else 'none',
+            'text': '\n\n'.join(parts),
+            'confidence': (sum(confidences) / len(confidences)) if confidences else None,
+            'confidence_basis': 'unweighted_mean_of_measured_chunk_confidences',
+            'chunks_processed': len(chunk_paths),
+        }
+
     def process_batch(self, doc_ids: List[str]) -> List[str]:
-        """Run OCR processing for the specified documents."""
+        """
+        Run OCR processing for the specified documents.
+
+        Each document is processed from the chunk PDFs prepare_batch wrote, in
+        chunk order. If no chunks are on disk (the document was not prepared),
+        the source PDF is processed whole and that is logged.
+        """
         catalog = self.load_catalog()
         completed = []
 
@@ -238,8 +319,14 @@ class HDARPOrchestrator:
                 if processor is None:
                     processor = self._get_processor()
 
-                logger.info(f"Processing {doc_id}...")
-                result = processor.process_pdf(str(pdf_path))
+                chunk_paths = self.chunk_paths(doc_id)
+                if chunk_paths:
+                    logger.info(f"Processing {doc_id} ({len(chunk_paths)} chunks)...")
+                    result = self._process_chunks(processor, chunk_paths)
+                else:
+                    logger.info(f"Processing {doc_id} (no chunks on disk; "
+                                f"processing the source PDF whole)...")
+                    result = processor.process_pdf(str(pdf_path))
 
                 output_path = self.output_dir / doc_id / f"{doc_id}_text.txt"
                 output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -249,8 +336,12 @@ class HDARPOrchestrator:
                 entry.status = "COMPLETE"
                 entry.completion_date = datetime.now().isoformat()
                 entry.output_hash = self._hash_file(output_path)
-                # Set a coarse quality proxy from confidence
-                entry.quality_score = round(result.get('confidence', 0.0), 3)
+                # Mean OCR consensus confidence, or None when nothing was
+                # measured (embedded-text path). Not the 0-27 QualityScorer
+                # total — see the CatalogEntry docstring.
+                confidence = result.get('confidence')
+                entry.quality_score = (round(confidence, 3)
+                                       if isinstance(confidence, (int, float)) else None)
                 entry.error_message = None
                 completed.append(doc_id)
             except Exception as e:

@@ -11,13 +11,18 @@ Intelligent consensus adjudication between 3 OCR engines using rule-based logic.
 3. High-Confidence Unilateral - Single engine >0.95, others <0.50 (confidence: 0.85-0.90)
 4. Column-Type Validation - NUMERIC validation catches O→0, I→1 (confidence: 0.85-0.92)
 5. Character Similarity - >80% similarity (confidence: 0.80-0.90)
-6. Default to Primary - Fallback to PaddleOCR (confidence: 0.60-0.85)
+6. Default to Primary - Fallback to PaddleOCR (confidence: 0.60-0.90)
 
-Expected Accuracy: 95-98% on clean documents, 85-92% on degraded scans
+Indicative accuracy (illustrative ranges from development use, NOT results from
+a published benchmark dataset — none ships with this repo): 95-98% on clean
+documents, 85-92% on degraded scans.
+
+This engine always returns a text (Rule 6 falls back to the primary engine); it
+applies no minimum-confidence threshold and marks no gaps. Callers that need a
+"do not use below X" policy must apply their own floor to `result.confidence`.
 
 Author: Nicholas Anderson
-Version: 1.0.0
-Date: 2025-12-22
+Version: 5.1 (snapshot released 2026-05-01)
 License: MIT
 """
 
@@ -400,7 +405,13 @@ class Sraffa30ConsensusEngine:
         """
         Rule 6: Default to primary engine (PaddleOCR).
 
-        Fallback when no other rule applies.
+        Fallback when no other rule applies. Reported confidence is
+        `max(0.60, conf * 0.9)`, i.e. the real range is [0.60, 0.90].
+
+        Note the 0.60 floor works in both directions: it discounts a confident
+        engine (0.90 -> 0.81) but it also RAISES a read the engine itself
+        distrusted (0.11 -> 0.60). A low-confidence line is therefore still
+        returned, at 0.60. This engine does not drop or gap-mark anything.
         """
         # Try engines in priority order
         for engine_name in ['paddle', 'easyocr', 'tesseract']:
@@ -408,7 +419,7 @@ class Sraffa30ConsensusEngine:
                 text, conf = engines[engine_name]
                 return ConsensusResult(
                     text=text,
-                    confidence=max(0.60, conf * 0.9),  # Reduce confidence for uncertainty
+                    confidence=max(0.60, conf * 0.9),  # floor 0.60, ceiling 0.90
                     winning_engines=[engine_name],
                     rule_applied='default_to_primary',
                     metadata={
@@ -498,8 +509,13 @@ class Sraffa30ConsensusEngine:
 # ==============================================================================
 
 if __name__ == "__main__":
-    """Test consensus engine with synthetic cases."""
-    print("\nSraffa 3.0 Consensus Engine - Test Cases")
+    """
+    Demo: print what the engine returns for a handful of synthetic inputs.
+
+    This is a demo, not a test — it asserts nothing. The assertion suite lives
+    in tests/ (`python -m pytest`).
+    """
+    print("\nSraffa 3.0 Consensus Engine - Demo Cases")
     print("=" * 80)
 
     consensus = Sraffa30ConsensusEngine()
@@ -549,13 +565,29 @@ if __name__ == "__main__":
     print(f"  Rule: {result.rule_applied}")
     print(f"  Engines: {result.winning_engines}")
 
-    # Test Case 4: Column Type Validation
-    print("\nTest 4: Column Type Validation (numeric cleaning)")
+    # Test Case 4a: correlated OCR error — Rule 1 fires FIRST, so Rule 4 never
+    # sees this input and the O-for-zero error survives. This is a real
+    # limitation of the priority hierarchy, shown here rather than hidden.
+    print("\nTest 4a: Both engines make the SAME numeric error (Rule 1 wins first)")
     result = consensus.adjudicate(
         paddle_text="1O5.3",  # O instead of 0
         paddle_conf=0.85,
         easyocr_text="1O5.3",
         easyocr_conf=0.82,
+        column_type="NUMERIC"
+    )
+    print(f"  Text: '{result.text}'   <- NOT cleaned: perfect agreement outranks type validation")
+    print(f"  Confidence: {result.confidence:.3f}")
+    print(f"  Rule: {result.rule_applied}")
+    print(f"  Cleaned: {result.metadata.get('cleaned_text')}")
+
+    # Test Case 4b: engines disagree, so Rules 1-3 fall through and Rule 4 fires.
+    print("\nTest 4b: Column Type Validation (numeric cleaning) - engines disagree")
+    result = consensus.adjudicate(
+        paddle_text="1O5.3",  # O instead of 0
+        paddle_conf=0.85,
+        easyocr_text="lO5.3",  # l instead of 1, O instead of 0
+        easyocr_conf=0.40,
         column_type="NUMERIC"
     )
     print(f"  Text: '{result.text}'")
@@ -576,6 +608,20 @@ if __name__ == "__main__":
     print(f"  Rule: {result.rule_applied}")
     print(f"  Similarity: {result.metadata.get('similarity', 0):.3f}")
 
+    # Test Case 6: Default to Primary — no agreement, no similarity
+    print("\nTest 6: Default to Primary (no rule matches)")
+    result = consensus.adjudicate(
+        paddle_text="Alpha",
+        paddle_conf=0.75,
+        easyocr_text="Beta",
+        easyocr_conf=0.72,
+        tesseract_text="Gamma",
+        tesseract_conf=0.70
+    )
+    print(f"  Text: '{result.text}'")
+    print(f"  Confidence: {result.confidence:.3f}")
+    print(f"  Rule: {result.rule_applied}")
+
     # Statistics
     print("\n" + "=" * 80)
     print("Consensus Statistics:")
@@ -585,4 +631,5 @@ if __name__ == "__main__":
             print(f"  {rule}: {data['count']} ({data['percentage']:.1f}%)")
 
     print("\n" + "=" * 80)
-    print("Test complete. Consensus engine validated.")
+    print("Demo complete. This script asserts nothing - run `python -m pytest` "
+          "for the actual test suite.")

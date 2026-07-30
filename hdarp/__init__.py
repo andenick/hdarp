@@ -2,8 +2,11 @@
 HDARP — Hybrid Direct Agent Reading Protocol
 =============================================
 
-Production-grade PDF extraction for AI agent pipelines.
-95-98% accuracy through multi-engine OCR consensus.
+PDF extraction for AI agent pipelines, built around multi-engine OCR consensus.
+
+Indicative accuracy (illustrative ranges from development use, NOT results from
+a published benchmark dataset — none ships with this repo): 95-98% on clean
+documents, 85-92% on degraded scans.
 
 Modules:
     splitter        — Density-aware PDF chunking
@@ -38,7 +41,7 @@ from hdarp.processor import Sraffa30Processor
 from hdarp.orchestrator import HDARPOrchestrator, CatalogEntry
 from hdarp.quality_scorer import QualityScorer, QualityScore
 
-__version__ = "1.0.0"
+__version__ = "5.1"
 __author__ = "Nicholas Anderson"
 
 __all__ = [

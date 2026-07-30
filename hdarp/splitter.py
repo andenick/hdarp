@@ -15,7 +15,7 @@ Key Features:
 - Enhanced manifest with density metrics
 
 Author: Nicholas Anderson
-Version: 1.0.0
+Version: 5.1 (snapshot released 2026-05-01)
 License: MIT
 """
 
@@ -26,7 +26,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass, asdict
-from PyPDF2 import PdfReader, PdfWriter
+from pypdf import PdfReader, PdfWriter
 
 
 # ==============================================================================
@@ -370,7 +370,7 @@ class PDFSplitterOrchestrator:
             "chunks_created": len(chunks),
             "max_chunk_size_mb": self.max_chunk_size_mb,
             "max_chunk_pages": self.max_chunk_pages,
-            "hdarp_version": "1.0",
+            "hdarp_version": "5.1",
             "processing_status": "READY",
             "ready_for_processing": True,
             "avg_density_mb_per_page": round(density_report.avg_density, 4),

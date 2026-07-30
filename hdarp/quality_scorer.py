@@ -6,6 +6,11 @@ HDARP Quality Scorer — 27-point Weighted Quality Framework
 Evaluates the quality of an HDARP extraction across seven weighted components,
 producing a single 27-point score and a letter grade.
 
+Standalone utility: the batch pipeline in orchestrator.py does NOT call this
+scorer. Four of the seven components (tables, equations, figures, metadata —
+18 of the 27 points) score artifacts this package does not itself produce, so
+the caller must supply them.
+
 Components:
   Tables:           8 points (CSV format, header detection, cell accuracy)
   Text:             4 points (character accuracy, paragraph structure)
@@ -24,7 +29,7 @@ Grading:
   F: < 10    Failed extraction
 
 Author: Nicholas Anderson
-Version: 1.0.0
+Version: 5.1 (snapshot released 2026-05-01)
 License: MIT
 """
 
