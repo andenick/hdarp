@@ -1,8 +1,14 @@
 """
-HDARP — Hybrid Direct Agent Reading Protocol
-=============================================
+HDARP — Multi-Engine OCR Consensus for PDF Extraction
+======================================================
 
-PDF extraction for AI agent pipelines, built around multi-engine OCR consensus.
+Density-aware PDF chunking, three OCR engine wrappers, and a six-rule consensus
+adjudicator that turns disagreeing OCR reads into one line with an audit trail.
+
+The name is the acronym of an in-house protocol ("Hybrid Direct Agent Reading
+Protocol"); this package publishes only its OCR-consensus half. There is no
+agent or vision code here: nothing calls a language or vision model, and nothing
+produces tables, equations or figure descriptions.
 
 Indicative accuracy (illustrative ranges from development use, NOT results from
 a published benchmark dataset — none ships with this repo): 95-98% on clean
@@ -13,8 +19,10 @@ Modules:
     consensus       — 6-rule OCR consensus adjudication
     ocr_engines     — PaddleOCR/EasyOCR/Tesseract unified interface
     processor       — Multi-engine OCR processing orchestration
-    orchestrator    — Batch pipeline with auto-continuation
-    quality_scorer  — 27-point quality scoring framework
+    orchestrator    — Sequential batch pipeline with auto-continuation
+    quality_scorer  — 27-point quality scoring framework (standalone; the
+                      pipeline does not call it, and 18 of its 27 points score
+                      artifacts this package does not produce)
 
 Quick Start:
     >>> from hdarp import PDFSplitterOrchestrator, Sraffa30ConsensusEngine

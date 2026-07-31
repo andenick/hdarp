@@ -9,16 +9,18 @@ producing a single 27-point score and a letter grade.
 Standalone utility: the batch pipeline in orchestrator.py does NOT call this
 scorer. Four of the seven components (tables, equations, figures, metadata —
 18 of the 27 points) score artifacts this package does not itself produce, so
-the caller must supply them.
+the caller must supply them. Scored on this package's own output alone, an
+extraction caps at 9/27 and therefore grades F; that is a statement about the
+inputs, not about the extraction.
 
-Components:
-  Tables:           8 points (CSV format, header detection, cell accuracy)
-  Text:             4 points (character accuracy, paragraph structure)
-  Equations:        3 points (LaTeX validity, symbol recognition)
-  Figures:          3 points (description completeness, references)
-  OCR Confidence:   2 points (mean confidence across consensus results)
-  Formatting:       3 points (section structure, whitespace, encoding)
-  Metadata:         4 points (page numbers, headers, cross-references)
+Components (the last column says whether this package can supply the input):
+  Text:             4 points (character accuracy, paragraph structure)   YES
+  Formatting:       3 points (section structure, whitespace, encoding)   YES
+  OCR Confidence:   2 points (mean confidence across consensus results)  YES
+  Tables:           8 points (CSV format, header detection, cell accuracy)  no
+  Equations:        3 points (LaTeX validity, symbol recognition)          no
+  Figures:          3 points (description completeness, references)        no
+  Metadata:         4 points (page numbers, headers, cross-references)     no
   ==========       27 points total
 
 Grading:

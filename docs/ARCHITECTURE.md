@@ -1,14 +1,22 @@
 # HDARP Architecture
 
+## Scope of this package
+
+This repository publishes the **OCR-consensus layer** of the in-house protocol the acronym HDARP
+comes from (*Hybrid Direct Agent Reading Protocol*). The agent-reading half of that protocol is
+**not** in this repository: nothing here calls a language or vision model, and nothing here
+produces tables, equations or figure descriptions. What is here is PDF chunking, three OCR engine
+wrappers, a six-rule consensus adjudicator, a sequential batch pipeline, and a standalone quality
+scorer. See the README's "What this package does **not** do" for the full list.
+
 ## Design Goals
 
-HDARP was built for one specific use case: **enabling AI agents to reliably extract structured data from large document corpora for scholarly research and regulatory analysis**.
-
-Three principles guide every design decision:
+The layer was built to feed large document corpora into downstream scholarly and regulatory
+analysis. Three principles guide every design decision:
 
 1. **Accuracy over speed** — Three OCR engines are slower than one, but the consensus mechanism catches errors no single engine would.
 2. **Transparency over opacity** — Every extraction includes a full audit trail.
-3. **Safety over convenience** — Never present a guess as a reading. See [§5](#5-what-this-snapshot-does-and-does-not-do-about-fabrication) for what that principle does and does not amount to in the shipped code.
+3. **Safety over convenience** — Never present a guess as a reading. See [§4](#4-what-this-snapshot-does-and-does-not-do-about-fabrication) for what that principle does and does not amount to in the shipped code.
 
 ## High-Level Pipeline
 
@@ -24,37 +32,25 @@ PDF Input
    │     Retries with fewer pages if oversized
    │     Accepts oversized single pages with warning
    │
-   ├─→ Hybrid Extraction
-   │   ├─→ DARP (agent vision)
-   │   │     Tables → CSV (98%+ accuracy)
-   │   │     Equations → LaTeX
-   │   │     Figures → markdown descriptions
-   │   │
-   │   └─→ Sraffa 3.0 OCR (consensus.py + ocr_engines.py)
-   │         PaddleOCR + EasyOCR + Tesseract
-   │         6-rule consensus adjudication
-   │         95-98% accuracy (indicative — see Performance)
+   ├─→ Embedded-text pre-check (ocr_engines.py)
+   │     PDF already has a text layer? Copy it verbatim and stop.
+   │     No OCR, no consensus, no confidence reported.
    │
-   ├─→ Quality Scoring (quality_scorer.py)
-   │     27-point weighted framework
-   │     Flags low-quality extractions for review
+   ├─→ Sraffa 3.0 OCR (ocr_engines.py + consensus.py)   [no text layer]
+   │     PaddleOCR + EasyOCR + Tesseract, per rendered page
+   │     6-rule consensus adjudication, per line
+   │     95-98% accuracy (indicative — see Performance)
    │
    └─→ Output
-       structured CSV/LaTeX/markdown/text
+       plain text per document + a CSV catalog (orchestrator.py)
+
+Off to the side, called by nothing above:
+   quality_scorer.py — 27-point scoring for extractions you assemble yourself
 ```
 
 ## Key Architectural Decisions
 
-### 1. Why Hybrid (DARP + OCR)?
-
-Pure OCR misses tables. Pure agent vision is expensive at scale. The hybrid approach uses each tool where it's strongest:
-
-- **DARP** (agent vision) for structured content: tables, equations, figures. ~$0.01-0.05 per page.
-- **Sraffa 3.0 OCR** (local engines) for body text. Free after one-time model download.
-
-As an illustrative example, a 200-page document with 30 tables incurs far fewer agent calls (paying for ~30 table extractions instead of running agent vision over all 200 pages) — an order-of-magnitude cost saving. The exact ratio depends entirely on document mix; this is a worked example, not a measured figure.
-
-### 2. Why Three OCR Engines?
+### 1. Why Three OCR Engines?
 
 Each engine has different strengths:
 
@@ -66,7 +62,7 @@ When all three agree, we have very high confidence. When they disagree, the disa
 
 See `CONSENSUS_RULES.md` for the full rule hierarchy.
 
-### 3. Why Density-Aware Chunking?
+### 2. Why Density-Aware Chunking?
 
 A 100-page text-heavy academic paper and a 100-page image-heavy annual report behave very differently when chunked:
 
@@ -80,25 +76,31 @@ The density classifier (LOW < 0.05 MB/page, MEDIUM 0.05-0.10, HIGH > 0.10) selec
 
 This is the difference between processing a corpus correctly and failing on the first scanned book.
 
-### 4. Why a Quality Scorer?
+### 3. Why a Quality Scorer?
 
 OCR confidence scores are not comparable across engines and don't map cleanly to "is this extraction good enough." The 27-point framework gives a single weighted score:
 
-| Component | Max Points |
-|-----------|-----------|
-| Tables | 8 |
-| Text | 4 |
-| Equations | 3 |
-| Figures | 3 |
-| OCR Confidence | 2 |
-| Formatting | 3 |
-| Metadata | 4 |
+| Component | Max Points | Scoreable from this package's own output? |
+|-----------|-----------|-------------------------------------------|
+| Text | 4 | Yes — from the extracted text |
+| Formatting | 3 | Yes — from the extracted text |
+| OCR Confidence | 2 | Yes — from the mean consensus confidence |
+| Tables | 8 | No — caller-supplied |
+| Equations | 3 | No — caller-supplied |
+| Figures | 3 | No — caller-supplied |
+| Metadata | 4 | No — caller-supplied |
 
-Scores below a threshold get flagged for human review or re-processing with different parameters.
+Read that second column before using the score. **The scorer is a standalone utility in this
+snapshot** — `orchestrator.py` does not call it, and this package produces no tables, equations,
+figures or document metadata for it to score. Fed only what this package emits, an extraction caps
+at 9/27, which grades F; that is a property of the inputs, not of the extraction. The 18
+caller-fed points are retained because the scoring logic is sound and useful to anyone holding
+those artifacts from another tool.
 
-The scorer is a standalone utility in this snapshot — `orchestrator.py` does not call it. The catalog's `quality_score` column holds the mean OCR consensus confidence (0-1), or nothing at all when no confidence was measured.
+The catalog's `quality_score` column is a different number entirely: it holds the mean OCR
+consensus confidence (0-1), or nothing at all when no confidence was measured.
 
-### 5. What this snapshot does (and does not do) about fabrication
+### 4. What this snapshot does (and does not do) about fabrication
 
 A fabricated number is worse than a missing number. In scholarly contexts, missing data is a known unknown — you handle it explicitly. Fabricated data is an unknown unknown — it corrupts everything downstream.
 
@@ -106,11 +108,12 @@ What the shipped code does towards that:
 
 - **Audit trail**: every result records which rule fired, which engines contributed, and what alternatives were considered.
 - **No invented confidence**: the embedded-text path runs no OCR and no consensus, so it reports `confidence: None` rather than a hardcoded 1.0, and the catalog stores nothing rather than a perfect score.
+- **Floored confidences are labelled as such**: the one place where a reported confidence is a constant rather than a measurement is Rule 6's 0.60 floor, and a floored result says so in `metadata["confidence_floor_applied"]` while keeping the engine's own number in `metadata["primary_engine_confidence"]`.
 
 What it does **not** do, and you must therefore do yourself:
 
-- **There is no confidence threshold and no gap marker.** Rule 6 always returns the primary engine's text, and its `max(0.60, conf × 0.9)` floor raises a distrusted read to 0.60 instead of dropping it. Apply your own floor to `result.confidence`.
-- **There is no content-filter handling here**, because there is no agent-vision call in this package.
+- **There is no confidence threshold and no gap marker.** Rule 6 always returns the primary engine's text, and its `max(0.60, conf × 0.9)` floor raises a distrusted read to 0.60 instead of dropping it. Apply your own floor to `result.confidence` (or to `metadata["primary_engine_confidence"]`).
+- **There is no content-filter or refusal handling here**, because this package makes no model call that could be filtered.
 
 ## Module Responsibilities
 
@@ -122,7 +125,7 @@ Line counts are `wc -l` of the files in this commit.
 - Retry logic for oversized chunks
 - Manifest generation
 
-### `consensus.py` (635 LOC)
+### `consensus.py` (661 LOC)
 - 6-rule adjudication hierarchy
 - Probabilistic confidence combination
 - Statistics tracking
@@ -145,7 +148,7 @@ Line counts are `wc -l` of the files in this commit.
 - Reads back the splitter's manifest and processes each chunk in order
 - Catalog synchronisation (CSV)
 
-### `quality_scorer.py` (318 LOC)
+### `quality_scorer.py` (320 LOC)
 - 27-point weighted scoring framework
 - Per-component metrics
 - Quality grade assignment (A-F)
@@ -159,10 +162,9 @@ The figures below are **indicative**, not benchmark results — illustrative ran
 |--------|--------------|-----------------|
 | Text accuracy (clean scans) | 88-92% | 95-98% |
 | Text accuracy (degraded) | 70-80% | 85-92% |
-| Table extraction | N/A | high (agent vision) |
 | Processing speed | ~1 sec/page | ~3-5 sec/page |
 
-(An earlier version of this table claimed "near-zero false positives (gap marking)". That row has been removed: this package does not gap-mark, and no false-positive rate was ever measured. See [§5](#5-what-this-snapshot-does-and-does-not-do-about-fabrication).)
+(Two rows have been removed from earlier versions of this table. "Near-zero false positives (gap marking)" went because this package does not gap-mark and no false-positive rate was ever measured — see [§4](#4-what-this-snapshot-does-and-does-not-do-about-fabrication). "Table extraction — high (agent vision)" went because this package extracts no tables at all.)
 
 Indicatively, the 3-5× speed cost buys a meaningful accuracy improvement.
 
@@ -180,17 +182,23 @@ Indicatively, the 3-5× speed cost buys a meaningful accuracy improvement.
 
 For high-throughput use cases, a single-engine pipeline with Tesseract or PaddleOCR alone would be 3-5× faster at the cost of an indicative 7-15 percentage points of accuracy. The right choice depends on how much error your downstream use case can absorb — and, either way, on the confidence floor you apply yourself.
 
-## Integration with AI Agent Pipelines
+## What a caller drives
 
-HDARP was designed to run inside Claude Code agent pipelines. The protocol is:
+The package is a library first and a batch runner second. A caller — a script, a scheduler, or a
+person — typically does this:
 
-1. Agent identifies a PDF that needs processing
-2. Agent calls splitter for density assessment
-3. Agent decides chunking strategy (or accepts default)
-4. For each chunk: agent calls DARP for tables/equations, OCR for body text
-5. Consensus engine adjudicates OCR results
-6. Quality scorer evaluates the chunk
-7. Catalog is updated with status, score, and metadata
-8. Next chunk processes (auto-continuation)
+1. Point `HDARPOrchestrator` at a corpus directory and an output directory.
+2. It discovers the PDFs and writes a catalog row per document (`PENDING`).
+3. It assesses density and chunks each document, writing `manifest.json` (`PREPARED`).
+4. It processes each chunk in order: embedded-text copy if there is a text layer, otherwise
+   three-engine OCR with per-line consensus.
+5. It writes concatenated text per document, records the mean measured confidence and SHA-256
+   input/output hashes, and marks the row `COMPLETE` (or `FAILED`, with the error).
+6. It advances to the next batch of `PENDING` documents, unless `--single` was given.
 
-A reviewer can drop into any stage of this pipeline and inspect the full state — what was processed, what consensus rules fired, what the alternatives were.
+Nothing in that loop validates the output, and nothing runs concurrently. A caller who wants a
+quality gate applies its own — a floor on `result.confidence`, or `QualityScorer` fed with
+artifacts from elsewhere.
+
+A reviewer can drop into any stage and inspect the full state — what was processed, what consensus
+rules fired, which engines contributed, and whether a confidence was measured or floored.
