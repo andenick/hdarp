@@ -8,7 +8,7 @@ Intelligent consensus adjudication between 3 OCR engines using rule-based logic.
 6-Rule Hierarchy (priority order):
 1. Perfect Agreement - All engines agree (confidence: 0.95-0.99)
 2. Majority Agreement - 2+ engines agree (confidence: 0.85-0.95)
-3. High-Confidence Unilateral - Single engine >0.95, others <0.50 (confidence: 0.85-0.90)
+3. High-Confidence Unilateral - Single engine >=0.95, others <0.50 (confidence: up to 0.90)
 4. Column-Type Validation - NUMERIC validation catches O→0, I→1 (confidence: 0.85-0.92)
 5. Character Similarity - >80% similarity (confidence: 0.80-0.90)
 6. Default to Primary - Fallback to PaddleOCR (confidence: 0.60-0.90)
@@ -20,6 +20,11 @@ documents, 85-92% on degraded scans.
 This engine always returns a text (Rule 6 falls back to the primary engine); it
 applies no minimum-confidence threshold and marks no gaps. Callers that need a
 "do not use below X" policy must apply their own floor to `result.confidence`.
+
+Rule 6's reported confidence is `max(0.60, conf * 0.9)`, so for a distrusted
+read the 0.60 is a constant, not a measurement. When that happens the result's
+metadata says so (`confidence_floor_applied`) and carries the engine's own
+number (`primary_engine_confidence`) so the floor can be undone.
 
 Author: Nicholas Anderson
 Version: 5.1 (snapshot released 2026-05-01)
@@ -412,19 +417,34 @@ class Sraffa30ConsensusEngine:
         engine (0.90 -> 0.81) but it also RAISES a read the engine itself
         distrusted (0.11 -> 0.60). A low-confidence line is therefore still
         returned, at 0.60. This engine does not drop or gap-mark anything.
+
+        Because that floor is the one place where the reported confidence is a
+        constant rather than a measurement, the result records what happened to
+        it. Every Rule 6 result carries in `metadata`:
+
+            primary_engine_confidence   the engine's own confidence, unmodified
+            confidence_floor_applied    True when the 0.60 floor RAISED the value
+
+        A caller that wants the floor undone should read
+        `metadata['primary_engine_confidence']` instead of `confidence`.
         """
         # Try engines in priority order
         for engine_name in ['paddle', 'easyocr', 'tesseract']:
             if engine_name in engines:
                 text, conf = engines[engine_name]
+                discounted = conf * 0.9
                 return ConsensusResult(
                     text=text,
-                    confidence=max(0.60, conf * 0.9),  # floor 0.60, ceiling 0.90
+                    confidence=max(0.60, discounted),  # floor 0.60, ceiling 0.90
                     winning_engines=[engine_name],
                     rule_applied='default_to_primary',
                     metadata={
                         'fallback': True,
-                        'engine_priority': self.engine_priority.get(engine_name, 0)
+                        'engine_priority': self.engine_priority.get(engine_name, 0),
+                        # The engine's own number, so a caller can undo the floor.
+                        'primary_engine_confidence': conf,
+                        # True when 0.60 is a floor, not a measurement.
+                        'confidence_floor_applied': discounted < 0.60,
                     }
                 )
 
@@ -436,7 +456,13 @@ class Sraffa30ConsensusEngine:
             confidence=0.60,
             winning_engines=[first_engine],
             rule_applied='default_fallback',
-            metadata={'fallback': True, 'note': 'No priority engine available'}
+            metadata={
+                'fallback': True,
+                'note': 'No priority engine available',
+                'primary_engine_confidence': conf,
+                # This branch reports a flat 0.60 regardless of the input.
+                'confidence_floor_applied': True,
+            }
         )
 
     # Helper methods

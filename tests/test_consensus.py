@@ -142,6 +142,30 @@ def test_engine_applies_no_minimum_confidence_threshold(engine):
     assert result.confidence == pytest.approx(0.60)  # raised from 0.11
 
 
+def test_rule6_records_that_the_floor_was_applied(engine):
+    """
+    The 0.60 floor is a constant, not a measurement, so Rule 6 says so in the
+    metadata and keeps the engine's own number for callers who want it back.
+    """
+    floored = engine.adjudicate(
+        paddle_text="Itcm A", paddle_conf=0.11,
+        easyocr_text="Xtem B", easyocr_conf=0.09,
+        tesseract_text="Ztum C", tesseract_conf=0.05,
+    )
+    assert floored.confidence == pytest.approx(0.60)
+    assert floored.metadata["confidence_floor_applied"] is True
+    assert floored.metadata["primary_engine_confidence"] == pytest.approx(0.11)
+
+    not_floored = engine.adjudicate(
+        paddle_text="Alpha", paddle_conf=0.75,
+        easyocr_text="Beta", easyocr_conf=0.72,
+        tesseract_text="Gamma", tesseract_conf=0.70,
+    )
+    assert not_floored.confidence == pytest.approx(0.675)  # 0.75 * 0.9, above the floor
+    assert not_floored.metadata["confidence_floor_applied"] is False
+    assert not_floored.metadata["primary_engine_confidence"] == pytest.approx(0.75)
+
+
 # ---------------------------------------------------------------------------
 # Degenerate inputs
 # ---------------------------------------------------------------------------

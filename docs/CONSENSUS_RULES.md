@@ -45,7 +45,7 @@ Tesseract:  "Revenua" (conf 0.75)  ← disagrees
 ```
 
 ### Rule 3: High-Confidence Unilateral
-**Fires when**: One engine has confidence >0.95 AND all others have confidence <0.50.
+**Fires when**: One engine has confidence ≥0.95 AND all others have confidence <0.50.
 
 **Confidence formula**: `min(0.90, high_conf)` — slightly reduced because no agreement
 
@@ -137,6 +137,20 @@ Note also that the 0.60 floor cuts both ways. It discounts a confident engine
 (0.90 → 0.81), but it *raises* a read the engine itself distrusted (0.11 →
 0.60). Rule 6 never drops a line.
 
+Because that makes 0.60 a constant rather than a measurement, Rule 6 records
+what it did to the number:
+
+```python
+result.metadata["primary_engine_confidence"]  # the engine's own confidence, unmodified
+result.metadata["confidence_floor_applied"]   # True when the floor RAISED the value
+```
+
+Both keys are always present on a `default_to_primary` result, so a caller can
+detect a floored line programmatically and, if it prefers, filter on
+`primary_engine_confidence` instead. This is reporting, not refusal: the line is
+still returned either way. Asserted in
+`tests/test_consensus.py::test_rule6_records_that_the_floor_was_applied`.
+
 ## Engine Priority
 
 The consensus engine ranks engines for tie-breaking:
@@ -194,6 +208,6 @@ Tesseract:  "Ztum C" (conf 0.05)
 → Result:   "Itcm A" (conf 0.600, rule="default_to_primary")
 ```
 
-The 0.60 you get back is the floor, not a measurement of that line.
+The 0.60 you get back is the floor, not a measurement of that line — and the result says so, via `metadata["confidence_floor_applied"] == True` and `metadata["primary_engine_confidence"] == 0.11`.
 
-For scholarly and regulatory use, where a fabricated number is worse than a missing one, the caller must therefore apply its own floor to `result.confidence` and decide what to do below it. Gap marking belongs to the surrounding protocol, not to this package. This behaviour is asserted in `tests/test_consensus.py::test_engine_applies_no_minimum_confidence_threshold`.
+For scholarly and regulatory use, where a fabricated number is worse than a missing one, the caller must therefore apply its own floor and decide what to do below it — to `result.confidence`, or to `metadata["primary_engine_confidence"]` if it wants the floor undone. Gap marking belongs to the surrounding protocol, not to this package. This behaviour is asserted in `tests/test_consensus.py::test_engine_applies_no_minimum_confidence_threshold`.
