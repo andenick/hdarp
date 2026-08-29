@@ -2,11 +2,54 @@
 
 **A Python library that chunks large PDFs by content density, runs up to three OCR engines over the pages, and adjudicates their disagreements with a six-rule consensus hierarchy.**
 
-> **About the name**: HDARP began life as the acronym of an in-house protocol, *Hybrid Direct Agent Reading Protocol*. This repository publishes **one half of that protocol — the OCR-consensus layer**. The agent-reading half is not here: there is no vision call, no model client, no API key and no prompt anywhere in this package. The name is kept because it is the package name on disk and in the import path (`import hdarp`), not because this code performs agent reading.
+> **About the name**: HDARP began life as the acronym of an in-house protocol, *Hybrid Direct Agent Reading Protocol*. This repository publishes **one half of that protocol — the OCR-consensus layer**. The agent-reading half is not here: there is no vision call, no model client, no API key and no prompt anywhere in this package. The name is kept because it is the package name on disk and in the import path (`import hdarp`), not because this code performs agent reading. **The protocol that grew around this layer is documented in this repository as specification — see [The HDARP protocol today](#the-hdarp-protocol-today-v6-direct-agent-reading-for-hard) and [docs/protocol-v6.md](docs/protocol-v6.md).**
 >
 > **Snapshot note**: This repository is a frozen snapshot of the HDARP **v5.1** OCR-consensus layer, released **2026-05-01**. It is preserved as a self-contained reference implementation of the multi-engine consensus approach and is not tracked against later, unpublished versions of the protocol. Everything below describes the code in this repository as of that date.
 >
 > **On the numbers**: Accuracy and cost figures in this README and `docs/` are **indicative** — illustrative ranges and worked examples drawn from development use, *not* results from a published, reproducible benchmark dataset. No formal benchmark corpus is released with this repo. Treat them as order-of-magnitude guidance, not measured claims.
+
+---
+
+## The HDARP protocol today (v6): direct agent reading for hard documents
+
+Everything below the next divider describes **the code in this repository** — the v5.1
+OCR-consensus half of the protocol. This section describes the **protocol as it exists today**,
+which has moved on: modern HDARP is a discipline for having AI agents **read hard documents
+directly** — scanned books, statistical tables, equations, mixed-content reports — chunk by
+chunk, with validation stages that refuse silent failure. OCR is no longer the headline; it is a
+supporting layer (verbatim cross-checking and per-page rescue). The full specification is
+[docs/protocol-v6.md](docs/protocol-v6.md); the shape in brief:
+
+- **Mandatory chunking.** Any PDF over 10 pages or 1 MB is split; one chunk is read, processed,
+  and committed at a time. No whole-document dumps.
+- **Four content types per chunk, all four checked.** Body text, tables (→ CSV), equations
+  (→ LaTeX), figures (→ structured descriptions). Absence of a type is *explicitly confirmed*,
+  never silently omitted — a chunk processed for body text only is incomplete by definition.
+- **Two extraction modes.** *Verbatim* (faithful full-text for public-domain/technical sources)
+  and *analytical digest* (paraphrased, for in-copyright material) — chosen per document, recorded
+  per document.
+- **A validation stage that can fail.** Chunk-boundary markers, four-type completeness checks,
+  and a reviewer that can reject a batch back to `PREPARED`. The protocol's hardest rule is
+  **anti-silent-degradation**: when agent extraction fails, the run stops and reports — it never
+  substitutes a plain OCR dump or an invented summary and calls it done.
+- **A retry ladder, not a shrug.** Failures bisect to single pages, retry with scholarly framing,
+  and only three outcomes terminate without extraction (exact duplicate, content-filter
+  exhaustion after the full ladder, physically unreadable file) — each recorded, never guessed.
+- **OCR's two supporting roles.** (a) a *verbatim sibling* — an OCR pass alongside the agent
+  extraction, into a separate tree, so the two readings can be compared (augmentation, never
+  substitution); (b) *per-page rescue* when a single page defeats the ladder.
+- **Per-document processing records.** Identity, chunk counts, per-type counts, quality scores,
+  and provenance — every extraction leaves a machine-readable detail row.
+
+**What is in this repository vs. the protocol:** the Python package below implements the
+density-aware chunker and the six-rule consensus engine — real, runnable, tested code for the
+OCR half. The agent-reading half is *specified* here (v6) but not *shipped* here: it is a
+prompt/validation discipline over a vision-capable model, not a library. Where the protocol
+needs an engine for the OCR roles above, this consensus layer is the design that slot fills.
+
+A note on engines and scope: the production ecosystem around the protocol also includes a
+separate local-GPU extraction engine (multi-model vision routing); it is a distinct system and
+is not part of this package or its claims.
 
 ---
 
